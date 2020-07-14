@@ -246,3 +246,110 @@ def polynomials(diagram, k_max=None, terms=[["birth", "persistence"]], powers=[[
                 matrix_polynomials[i,k,j] = q1 @ q2
 
     return matrix_polynomials
+
+def gauss_kernel(x, y, diagram, x_coord, y_coord, sigma = None): #gaussian pdf
+    '''
+    x: (n x 2)-dimensional array
+    diagram: ndarray of (birth,death) pairs
+    x_coord, y_coord: string, (b,d) or (b,(b+d)/2) etc
+    sigma: float, standard deviation
+    '''
+    if sigma is None:
+        sigma = 1/(2 * len(diagram)) #can be changed
+    ux = quantities[x_coord](diagram)
+    uy = quantities[y_coord](diagram)
+    return (2*np.pi*sigma**2)**(-0.5)*np.exp(-((x-ux)**2+(y-uy)**2)/(2*sigma**2))
+
+
+def weight_func(diagram, y_coord, b=1): #wieght function
+    y = quantities[y_coord](diagram)
+    return np.piecewise(y,[y<=0,(y>0) & (y<b), y>=b], [0, lambda y: y/b, 1])
+
+
+def func2mat(diagram, m, window_size, ker, weight): #return persistence image per PD
+    '''
+    diagram: ndarray of (b,d) pairs
+    m: int, grid size, should be divisible by window_size
+    window_size: int, size of subarea
+    ker: function of kernel
+    weight: weight function
+    '''
+    assert m%window_size==0 #check if grid size divisible by window_size
+    
+    mat = np.zeros((m, m))
+    grid = np.linspace(0,1,m)
+    for i in range(m):
+        for j in range(m):
+            mat[i,j] = np.sum(ker(grid[i], grid[j], diagram)*weight(diagram)) #sum(f*g)
+    return mat.reshape(m//window_size, window_size, m//window_size, window_size).sum(axis=(1,3))
+
+
+def PI(diagram, m=100, ws=5, k_max=None, x_coord = 'birth', y_coord = 'persistence', f="linear", **kwargs):
+    '''
+    return Persistence Image for a list of PDs
+    '''
+    
+    if (type(diagram) == list) & (type(diagram[0]) == np.ndarray):
+        diagram = [diagram]
+
+    if k_max is None:
+        k_max = len(diagram[0]) - 1
+    
+    # init output matrix
+    assert m % ws == 0
+    
+    curve = np.zeros((len(diagram), k_max+1, m//ws, m//ws))
+    b = 0
+    for i in range(len(diagram)):
+        for k in range(k_max+1):
+            b = np.maximum(quantities["persistence"](diagram[i][k]).max(),b)
+            
+    g = lambda x, y, diag : gauss_kernel(x, y, diag, x_coord, y_coord)
+    w = lambda diag : weight_func(diag, y_coord, b)
+
+    for i in range(len(diagram)):
+        for k in range(k_max+1):
+
+            # filter a diagram according to a function
+            p = quantities["persistence"](diagram[i][k])
+            diagram_ik = diagram[i][k][p > functions[f](p, **kwargs)]
+
+            curve[i,k,:,:] = func2mat(diagram_ik, m, ws, g, w)
+
+    return curve
+
+
+def basis_func(t, PD, k, x_coord, y_coord):  #return persistence landscape per PD
+    basis = np.zeros((len(PD),len(t)))
+    for i,interval in enumerate(PD):
+        x = quantities[x_coord](interval.reshape(1,-1)).reshape(-1)[0]
+        y = quantities[y_coord](interval.reshape(1,-1)).reshape(-1)[0]
+        basis[i] = np.piecewise(t,[(t>=x)&(t<=(x+y)/2),(t>(x+y)/2)&(t<=y),t>y],
+                                [lambda t: t-x, lambda t: y-t, 0])
+        return np.sort(basis,axis=0)[-k]
+
+def PL(diagram, K, T=1, m =101, k_max=None, x_coord = 'birth', y_coord = 'death', f="linear", **kwargs):
+    '''
+    return Persistence Landscape for a list of PDs
+    K: int, K-th maximum
+    '''
+    if (type(diagram) == list) & (type(diagram[0]) == np.ndarray):
+        diagram = [diagram]
+
+    if k_max is None:
+        k_max = len(diagram[0]) - 1
+    
+    # init output matrix
+    curve = np.zeros((len(diagram), k_max+1, m))
+    t = np.linspace(0,T,m)
+    
+    for i in range(len(diagram)):
+        for k in range(k_max+1):
+
+            # filter a diagram according to a function
+            p = quantities["persistence"](diagram[i][k])
+            diagram_ik = diagram[i][k][p > functions[f](p, **kwargs)]
+
+            curve[i,k,:] = basis_func(t, diagram_ik, K, x_coord, y_coord)
+
+    return curve
